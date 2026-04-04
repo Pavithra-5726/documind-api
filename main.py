@@ -1,29 +1,17 @@
-from fastapi import FastAPI, File, UploadFile, Header, HTTPException, Depends
+from fastapi import FastAPI, File, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import anthropic
+import google.generativeai as genai
 import base64
 import os
 import json
-from typing import Optional
 import re
 
-app = FastAPI(
-    title="AI-Powered Document Analysis & Extraction API",
-    description="Extract and analyze content from PDF, DOCX, and image files using Claude AI",
-    version="1.0.0"
-)
+app = FastAPI(title="AI-Powered Document Analysis & Extraction API", version="1.0.0")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-API_KEY = os.environ.get("API_KEY", "hackathon-secret-key-2025")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 SUPPORTED_TYPES = {
     "application/pdf": "pdf",
@@ -35,233 +23,95 @@ SUPPORTED_TYPES = {
     "image/gif": "gif",
 }
 
-def verify_api_key(authorization: Optional[str] = Header(None)):
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Authorization header missing")
-    token = authorization.replace("Bearer ", "").replace("ApiKey ", "").strip()
-    if token != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    return token
-
 @app.get("/")
 def root():
-    return {
-        "service": "AI-Powered Document Analysis & Extraction",
-        "status": "running",
-        "version": "1.0.0",
-        "endpoints": {
-            "health": "/health",
-            "analyze": "/analyze (POST)",
-            "docs": "/docs"
-        }
-    }
+    return {"service": "AI-Powered Document Analysis & Extraction", "status": "running", "version": "1.0.0"}
 
 @app.get("/health")
 def health():
     return {"status": "healthy", "service": "document-analysis-api"}
 
 @app.post("/analyze")
-async def analyze_document(
-    file: UploadFile = File(...),
-    authorization: Optional[str] = Header(None),
-    _: str = Depends(verify_api_key)
-):
+async def analyze_document(request: Request, file: UploadFile = File(...)):
     content_type = file.content_type or ""
+    if file.filename:
+        fn = file.filename.lower()
+        if fn.endswith(".pdf"): content_type = "application/pdf"
+        elif fn.endswith(".docx"): content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        elif fn.endswith(".jpg") or fn.endswith(".jpeg"): content_type = "image/jpeg"
+        elif fn.endswith(".png"): content_type = "image/png"
+        elif fn.endswith(".webp"): content_type = "image/webp"
 
-    # Normalize content type
-    if file.filename and file.filename.endswith(".pdf"):
-        content_type = "application/pdf"
-    elif file.filename and (file.filename.endswith(".docx")):
-        content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    elif file.filename and (file.filename.endswith(".jpg") or file.filename.endswith(".jpeg")):
-        content_type = "image/jpeg"
-    elif file.filename and file.filename.endswith(".png"):
-        content_type = "image/png"
-
-    file_type = SUPPORTED_TYPES.get(content_type)
-    if not file_type:
-        raise HTTPException(
-            status_code=415,
-            detail=f"Unsupported file type: {content_type}. Supported: PDF, DOCX, JPEG, PNG, WEBP, GIF"
-        )
-
+    file_type = SUPPORTED_TYPES.get(content_type, "jpeg")
     file_bytes = await file.read()
-    if len(file_bytes) > 20 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="File too large. Maximum size is 20MB")
 
-    b64_data = base64.standard_b64encode(file_bytes).decode("utf-8")
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel("gemini-1.5-flash")
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    prompt = """Analyze this document and extract all information. Respond ONLY with valid JSON, no markdown:
+{
+  "document_type": "Invoice/Resume/Contract/Report/Form/Letter/etc",
+  "summary": "2-4 sentence summary",
+  "key_information": {"title": null, "date": null, "author_or_sender": null, "recipient": null, "subject": null},
+  "extracted_data": {
+    "entities": [],
+    "dates": [],
+    "amounts": [],
+    "contact_info": {"emails": [], "phones": [], "addresses": []},
+    "key_points": []
+  },
+  "tables": [],
+  "sentiment": "positive or negative or neutral or mixed",
+  "language": "English",
+  "confidence_score": 0.95,
+  "warnings": []
+}"""
 
-    system_prompt = """You are an expert document analyst and data extraction specialist. 
-    When given a document, analyze it thoroughly and extract all meaningful information.
-    Always respond with valid JSON only — no markdown, no explanation outside JSON.
-    Your JSON must follow this exact structure:
-    {
-      "document_type": "string (e.g., Invoice, Resume, Contract, Report, Form, Letter, etc.)",
-      "summary": "string - 2-4 sentence summary of the document",
-      "key_information": {
-        "title": "string or null",
-        "date": "string or null",
-        "author_or_sender": "string or null",
-        "recipient": "string or null",
-        "subject": "string or null"
-      },
-      "extracted_data": {
-        "entities": ["list of important named entities: people, organizations, locations"],
-        "dates": ["list of all dates found"],
-        "amounts": ["list of all monetary amounts or numbers"],
-        "contact_info": {
-          "emails": [],
-          "phones": [],
-          "addresses": []
-        },
-        "key_points": ["list of 3-7 key points or highlights from the document"]
-      },
-      "tables": [
-        {
-          "title": "table title if any",
-          "headers": ["col1", "col2"],
-          "rows": [["val1", "val2"]]
-        }
-      ],
-      "sentiment": "positive | negative | neutral | mixed",
-      "language": "detected language",
-      "confidence_score": 0.95,
-      "warnings": ["any issues like low quality, partial content, etc."]
-    }
-    Extract as much detail as possible. If a field has no data, use null or empty array."""
-
+    raw = ""
     try:
-        if file_type == "pdf":
-            message = client.messages.create(
-                model="claude-opus-4-5",
-                max_tokens=4096,
-                system=system_prompt,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "document",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "application/pdf",
-                                    "data": b64_data
-                                }
-                            },
-                            {
-                                "type": "text",
-                                "text": "Analyze this document thoroughly and extract all information. Return only valid JSON."
-                            }
-                        ]
-                    }
-                ]
-            )
-        elif file_type == "docx":
-            # For DOCX, extract text first using python-docx
+        if file_type == "docx":
             import io
             from docx import Document
             doc = Document(io.BytesIO(file_bytes))
-            full_text = "\n".join([para.text for para in doc.paragraphs if para.text.strip()])
-            tables_text = ""
-            for i, table in enumerate(doc.tables):
-                tables_text += f"\n[Table {i+1}]\n"
-                for row in table.rows:
-                    tables_text += " | ".join([cell.text for cell in row.cells]) + "\n"
-
-            message = client.messages.create(
-                model="claude-opus-4-5",
-                max_tokens=4096,
-                system=system_prompt,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"Analyze this DOCX document content:\n\n{full_text}\n\n{tables_text}\n\nReturn only valid JSON."
-                    }
-                ]
-            )
+            full_text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+            response = model.generate_content(f"{prompt}\n\nDocument:\n{full_text}")
         else:
-            # Image types
-            media_type_map = {
-                "jpeg": "image/jpeg",
-                "png": "image/png",
-                "webp": "image/webp",
-                "gif": "image/gif"
-            }
-            media_type = media_type_map.get(file_type, "image/jpeg")
-            message = client.messages.create(
-                model="claude-opus-4-5",
-                max_tokens=4096,
-                system=system_prompt,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": media_type,
-                                    "data": b64_data
-                                }
-                            },
-                            {
-                                "type": "text",
-                                "text": "Analyze this document image thoroughly and extract all information. Return only valid JSON."
-                            }
-                        ]
-                    }
-                ]
-            )
+            mime_map = {"pdf": "application/pdf", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"}
+            mime_type = mime_map.get(file_type, "image/jpeg")
+            b64_data = base64.standard_b64encode(file_bytes).decode("utf-8")
+            response = model.generate_content([{"mime_type": mime_type, "data": b64_data}, prompt])
 
-        raw_response = message.content[0].text.strip()
-        # Clean up any markdown fences if present
-        raw_response = re.sub(r"^```json\s*", "", raw_response)
-        raw_response = re.sub(r"\s*```$", "", raw_response)
-
-        result = json.loads(raw_response)
+        raw = response.text.strip()
+        raw = re.sub(r"^```json\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
 
         return JSONResponse(content={
             "success": True,
-            "filename": file.filename,
+            "fileName": file.filename,
             "file_type": file_type.upper(),
             "file_size_bytes": len(file_bytes),
+            "summary": result.get("summary", ""),
+            "entities": result.get("extracted_data", {}).get("entities", []),
+            "sentiment": result.get("sentiment", "neutral"),
+            "document_type": result.get("document_type", "Unknown"),
+            "language": result.get("language", "English"),
+            "confidence_score": result.get("confidence_score", 0.9),
+            "key_information": result.get("key_information", {}),
+            "extracted_data": result.get("extracted_data", {}),
+            "tables": result.get("tables", []),
+            "warnings": result.get("warnings", []),
             "analysis": result
         })
 
-    except json.JSONDecodeError:
+    except Exception as e:
         return JSONResponse(content={
             "success": True,
-            "filename": file.filename,
+            "fileName": file.filename,
             "file_type": file_type.upper(),
-            "file_size_bytes": len(file_bytes),
-            "analysis": {
-                "summary": raw_response[:500],
-                "raw_text": raw_response,
-                "document_type": "Unknown",
-                "warnings": ["Could not parse structured JSON from AI response"]
-            }
+            "summary": raw[:300] if raw else str(e),
+            "entities": [],
+            "sentiment": "neutral",
+            "document_type": "Unknown",
+            "warnings": [str(e)]
         })
-    except anthropic.APIError as e:
-        raise HTTPException(status_code=502, detail=f"AI service error: {str(e)}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
-
-@app.post("/analyze/batch")
-async def analyze_batch(
-    files: list[UploadFile] = File(...),
-    _: str = Depends(verify_api_key)
-):
-    if len(files) > 5:
-        raise HTTPException(status_code=400, detail="Maximum 5 files per batch request")
-
-    results = []
-    for file in files:
-        try:
-            result = await analyze_document(file=file, authorization=None, _="skip")
-            results.append({"filename": file.filename, "status": "success", "data": result})
-        except Exception as e:
-            results.append({"filename": file.filename, "status": "error", "error": str(e)})
-
-    return {"success": True, "total": len(files), "results": results}

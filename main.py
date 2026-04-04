@@ -23,7 +23,7 @@ SUPPORTED_TYPES = {
     "image/gif": "gif",
 }
 
-PROMPT = """Analyze this document and extract all information. Respond ONLY with valid JSON, no markdown:
+PROMPT = """Analyze this document and extract all information. Respond ONLY with valid JSON, no markdown, no explanation:
 {
   "document_type": "Invoice/Resume/Contract/Report/Form/Letter/etc",
   "summary": "2-4 sentence summary",
@@ -48,9 +48,13 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "service": "document-analysis-api"}
+    api_status = "configured" if GROQ_API_KEY else "missing"
+    return {"status": "healthy", "service": "document-analysis-api", "groq_api": api_status}
 
 async def call_groq(text: str) -> dict:
+    if not GROQ_API_KEY:
+        raise ValueError("GROQ_API_KEY environment variable is not set")
+
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
@@ -58,15 +62,28 @@ async def call_groq(text: str) -> dict:
     payload = {
         "model": "llama-3.3-70b-versatile",
         "messages": [
-            {"role": "system", "content": "You are a document analysis expert. Always respond with valid JSON only."},
-            {"role": "user", "content": f"{PROMPT}\n\nDocument content:\n{text}"}
+            {"role": "system", "content": "You are a document analysis expert. Always respond with valid JSON only. No markdown, no explanation."},
+            {"role": "user", "content": f"{PROMPT}\n\nDocument content:\n{text[:8000]}"}
         ],
         "temperature": 0.1,
         "max_tokens": 2000
     }
+
     async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
+        response = await client.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers=headers,
+            json=payload
+        )
         data = response.json()
+
+        # Check for API errors
+        if "error" in data:
+            raise ValueError(f"Groq API error: {data['error'].get('message', str(data['error']))}")
+
+        if "choices" not in data or len(data["choices"]) == 0:
+            raise ValueError(f"Unexpected Groq response: {str(data)[:200]}")
+
         raw = data["choices"][0]["message"]["content"].strip()
         raw = re.sub(r"^```json\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw)
@@ -81,8 +98,8 @@ async def extract_text_from_pdf(file_bytes: bytes) -> str:
             for page in pdf.pages:
                 text += page.extract_text() or ""
         return text.strip()
-    except Exception:
-        return base64.standard_b64encode(file_bytes).decode("utf-8")[:3000]
+    except Exception as e:
+        return f"PDF content (extraction failed: {str(e)})"
 
 @app.post("/analyze")
 async def analyze_document(request: Request, file: UploadFile = File(None)):
@@ -123,7 +140,7 @@ async def analyze_document(request: Request, file: UploadFile = File(None)):
             doc = Document(io.BytesIO(file_bytes))
             text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
         else:
-            text = f"[Image file: {file.filename}] - Please analyze this image document."
+            text = f"[Image file: {file.filename}] Please analyze this image document."
 
         result = await call_groq(text)
 
@@ -146,13 +163,14 @@ async def analyze_document(request: Request, file: UploadFile = File(None)):
         })
 
     except Exception as e:
+        error_msg = str(e)
         return JSONResponse(content={
-            "success": True,
+            "success": False,
             "fileName": file.filename,
             "file_type": file_type.upper(),
-            "summary": str(e),
+            "summary": error_msg,
             "entities": [],
             "sentiment": "neutral",
             "document_type": "Unknown",
-            "warnings": [str(e)]
+            "warnings": [error_msg]
         })

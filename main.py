@@ -1,17 +1,17 @@
 from fastapi import FastAPI, File, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import google.generativeai as genai
 import base64
 import os
 import json
 import re
+import httpx
 
 app = FastAPI(title="AI-Powered Document Analysis & Extraction API", version="1.0.0")
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
 SUPPORTED_TYPES = {
     "application/pdf": "pdf",
@@ -23,6 +23,25 @@ SUPPORTED_TYPES = {
     "image/gif": "gif",
 }
 
+PROMPT = """Analyze this document and extract all information. Respond ONLY with valid JSON, no markdown:
+{
+  "document_type": "Invoice/Resume/Contract/Report/Form/Letter/etc",
+  "summary": "2-4 sentence summary",
+  "key_information": {"title": null, "date": null, "author_or_sender": null, "recipient": null, "subject": null},
+  "extracted_data": {
+    "entities": [],
+    "dates": [],
+    "amounts": [],
+    "contact_info": {"emails": [], "phones": [], "addresses": []},
+    "key_points": []
+  },
+  "tables": [],
+  "sentiment": "positive or negative or neutral or mixed",
+  "language": "English",
+  "confidence_score": 0.95,
+  "warnings": []
+}"""
+
 @app.get("/")
 def root():
     return {"service": "AI-Powered Document Analysis & Extraction", "status": "running", "version": "1.0.0"}
@@ -30,6 +49,40 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "healthy", "service": "document-analysis-api"}
+
+async def call_groq(text: str) -> dict:
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "system", "content": "You are a document analysis expert. Always respond with valid JSON only."},
+            {"role": "user", "content": f"{PROMPT}\n\nDocument content:\n{text}"}
+        ],
+        "temperature": 0.1,
+        "max_tokens": 2000
+    }
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
+        data = response.json()
+        raw = data["choices"][0]["message"]["content"].strip()
+        raw = re.sub(r"^```json\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+        return json.loads(raw)
+
+async def extract_text_from_pdf(file_bytes: bytes) -> str:
+    try:
+        import io
+        import pdfplumber
+        text = ""
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            for page in pdf.pages:
+                text += page.extract_text() or ""
+        return text.strip()
+    except Exception:
+        return base64.standard_b64encode(file_bytes).decode("utf-8")[:3000]
 
 @app.post("/analyze")
 async def analyze_document(request: Request, file: UploadFile = File(None)):
@@ -61,46 +114,18 @@ async def analyze_document(request: Request, file: UploadFile = File(None)):
     file_type = SUPPORTED_TYPES.get(content_type, "jpeg")
     file_bytes = await file.read()
 
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.0-flash")  # ✅ FIXED: updated model name
-
-    prompt = """Analyze this document and extract all information. Respond ONLY with valid JSON, no markdown:
-{
-  "document_type": "Invoice/Resume/Contract/Report/Form/Letter/etc",
-  "summary": "2-4 sentence summary",
-  "key_information": {"title": null, "date": null, "author_or_sender": null, "recipient": null, "subject": null},
-  "extracted_data": {
-    "entities": [],
-    "dates": [],
-    "amounts": [],
-    "contact_info": {"emails": [], "phones": [], "addresses": []},
-    "key_points": []
-  },
-  "tables": [],
-  "sentiment": "positive or negative or neutral or mixed",
-  "language": "English",
-  "confidence_score": 0.95,
-  "warnings": []
-}"""
-
-    raw = ""
     try:
-        if file_type == "docx":
+        if file_type == "pdf":
+            text = await extract_text_from_pdf(file_bytes)
+        elif file_type == "docx":
             import io
             from docx import Document
             doc = Document(io.BytesIO(file_bytes))
-            full_text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-            response = model.generate_content(f"{prompt}\n\nDocument:\n{full_text}")
+            text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
         else:
-            mime_map = {"pdf": "application/pdf", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"}
-            mime_type = mime_map.get(file_type, "image/jpeg")
-            b64_data = base64.standard_b64encode(file_bytes).decode("utf-8")
-            response = model.generate_content([{"mime_type": mime_type, "data": b64_data}, prompt])
+            text = f"[Image file: {file.filename}] - Please analyze this image document."
 
-        raw = response.text.strip()
-        raw = re.sub(r"^```json\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
-        result = json.loads(raw)
+        result = await call_groq(text)
 
         return JSONResponse(content={
             "success": True,
@@ -125,7 +150,7 @@ async def analyze_document(request: Request, file: UploadFile = File(None)):
             "success": True,
             "fileName": file.filename,
             "file_type": file_type.upper(),
-            "summary": raw[:300] if raw else str(e),
+            "summary": str(e),
             "entities": [],
             "sentiment": "neutral",
             "document_type": "Unknown",

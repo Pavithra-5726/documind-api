@@ -11,15 +11,15 @@
 
 ## 🌐 Live URL
 
-🔗 **Frontend:** `https://your-frontend-url.vercel.app`  
-🔗 **Backend API:** `https://your-backend-url.onrender.com`  
-🔗 **API Docs:** `https://your-backend-url.onrender.com/docs`
+🔗 **Frontend:** `https://aidocsanalysis.netlify.app/`  
+🔗 **Backend API:** `https://documind-api-ki30.onrender.com`  
+🔗 **API Docs:** `https://documind-api-ki30.onrender.com/docs`
 
 ---
 
 ## 🎥 Video Demo
 
-📹 **Demo Link:** `https://your-youtube-or-drive-link`
+📹 **Demo Link:** `https://drive.google.com/file/d/1gyBzb-UqlDi1exyjSo-0RoWWqYAYRsnq/view?usp=sharing`
 
 ---
 

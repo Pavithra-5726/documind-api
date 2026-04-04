@@ -62,7 +62,7 @@ async def analyze_document(request: Request, file: UploadFile = File(None)):
     file_bytes = await file.read()
 
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel("gemini-2.0-flash")  # ✅ FIXED: updated model name
 
     prompt = """Analyze this document and extract all information. Respond ONLY with valid JSON, no markdown:
 {

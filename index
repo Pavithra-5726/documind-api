@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DocuMind – AI Document Analysis</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --surface2: #1a1a26;
+    --border: #2a2a3d;
+    --accent: #6c63ff;
+    --accent2: #00d4aa;
+    --accent3: #ff6b6b;
+    --text: #e8e8f0;
+    --muted: #6b6b8a;
+    --success: #00d4aa;
+    --error: #ff6b6b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  .noise {
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none; z-index: 0; opacity: 0.4;
+  }
+  .grid-bg {
+    position: fixed; inset: 0; z-index: 0; opacity: 0.04;
+    background-image: linear-gradient(var(--accent) 1px, transparent 1px),
+      linear-gradient(90deg, var(--accent) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+  .glow {
+    position: fixed; top: -200px; left: 50%; transform: translateX(-50%);
+    width: 600px; height: 400px;
+    background: radial-gradient(ellipse, rgba(108,99,255,0.15) 0%, transparent 70%);
+    pointer-events: none; z-index: 0;
+  }
+  .container { position: relative; z-index: 1; max-width: 900px; margin: 0 auto; padding: 40px 24px; }
+
+  header { text-align: center; padding: 60px 0 50px; }
+  .logo-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 100px; padding: 6px 16px; margin-bottom: 24px;
+    font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--accent2);
+  }
+  .logo-dot { width: 6px; height: 6px; background: var(--accent2); border-radius: 50%; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  h1 {
+    font-family: 'Syne', sans-serif; font-size: clamp(36px, 6vw, 64px);
+    font-weight: 800; line-height: 1.05; letter-spacing: -0.03em; margin-bottom: 16px;
+  }
+  h1 span { color: var(--accent); }
+  .subtitle { color: var(--muted); font-size: 14px; line-height: 1.7; max-width: 480px; margin: 0 auto; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; padding: 28px; margin-bottom: 20px;
+  }
+  .card-label {
+    font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;
+  }
+  .card-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  .input-row { display: flex; gap: 10px; align-items: stretch; flex-wrap: wrap; }
+  input[type="text"], input[type="url"] {
+    flex: 1; min-width: 200px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 16px;
+    color: var(--text); font-family: 'DM Mono', monospace; font-size: 13px;
+    outline: none; transition: border-color 0.2s;
+  }
+  input:focus { border-color: var(--accent); }
+  input::placeholder { color: var(--muted); }
+
+  .drop-zone {
+    border: 2px dashed var(--border); border-radius: 14px;
+    padding: 50px 30px; text-align: center; cursor: pointer;
+    transition: all 0.3s; background: var(--surface2); position: relative;
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--accent); background: rgba(108,99,255,0.05);
+  }
+  .drop-zone input[type="file"] {
+    position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+  }
+  .drop-icon { font-size: 40px; margin-bottom: 12px; }
+  .drop-text { font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+  .drop-hint { color: var(--muted); font-size: 12px; }
+  .file-name {
+    display: none; margin-top: 14px; background: rgba(108,99,255,0.1);
+    border: 1px solid rgba(108,99,255,0.3); border-radius: 8px;
+    padding: 8px 14px; font-size: 12px; color: var(--accent);
+  }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 13px 28px; border-radius: 10px; border: none; cursor: pointer;
+    font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700;
+    letter-spacing: 0.02em; transition: all 0.2s;
+  }
+  .btn-primary {
+    background: var(--accent); color: #fff;
+    box-shadow: 0 0 30px rgba(108,99,255,0.3);
+  }
+  .btn-primary:hover { background: #7c74ff; box-shadow: 0 0 40px rgba(108,99,255,0.5); transform: translateY(-1px); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+  .btn-secondary {
+    background: var(--surface2); color: var(--muted);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover { color: var(--text); border-color: var(--muted); }
+
+  .actions { display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
+
+  #status {
+    display: none; padding: 14px 18px; border-radius: 10px;
+    font-size: 13px; margin-top: 16px; align-items: center; gap: 10px;
+  }
+  #status.loading { display: flex; background: rgba(108,99,255,0.1); border: 1px solid rgba(108,99,255,0.3); color: var(--accent); }
+  #status.error { display: flex; background: rgba(255,107,107,0.1); border: 1px solid rgba(255,107,107,0.3); color: var(--error); }
+  #status.success { display: flex; background: rgba(0,212,170,0.1); border: 1px solid rgba(0,212,170,0.3); color: var(--success); }
+
+  .spinner {
+    width: 16px; height: 16px; border: 2px solid rgba(108,99,255,0.3);
+    border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #results { display: none; animation: slideUp 0.4s ease; }
+  @keyframes slideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+
+  .result-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 20px; flex-wrap: wrap; gap: 10px;
+  }
+  .result-title { font-family: 'Syne', sans-serif; font-size: 20px; font-weight: 700; }
+  .badges { display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge {
+    padding: 4px 12px; border-radius: 100px; font-size: 11px;
+    letter-spacing: 0.08em; text-transform: uppercase; font-weight: 500;
+  }
+  .badge-type { background: rgba(108,99,255,0.15); border: 1px solid rgba(108,99,255,0.3); color: var(--accent); }
+  .badge-sentiment-positive { background: rgba(0,212,170,0.15); border: 1px solid rgba(0,212,170,0.3); color: var(--success); }
+  .badge-sentiment-negative { background: rgba(255,107,107,0.15); border: 1px solid rgba(255,107,107,0.3); color: var(--error); }
+  .badge-sentiment-neutral { background: rgba(107,107,138,0.15); border: 1px solid var(--border); color: var(--muted); }
+  .badge-sentiment-mixed { background: rgba(255,165,0,0.15); border: 1px solid rgba(255,165,0,0.3); color: orange; }
+
+  .summary-box {
+    background: var(--surface2); border-left: 3px solid var(--accent);
+    border-radius: 0 10px 10px 0; padding: 16px 20px; margin-bottom: 20px;
+    line-height: 1.7; font-size: 13px; color: var(--text);
+  }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  @media(max-width: 600px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  .info-block { background: var(--surface2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .info-block h4 { font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+  .info-row { display: flex; gap: 8px; margin-bottom: 8px; font-size: 12px; }
+  .info-key { color: var(--muted); min-width: 110px; flex-shrink: 0; }
+  .info-val { color: var(--text); word-break: break-all; }
+
+  .tag-list { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tag {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 3px 10px; font-size: 11px; color: var(--text);
+  }
+  .tag-accent { border-color: rgba(108,99,255,0.4); color: var(--accent); }
+
+  .points-list { list-style: none; }
+  .points-list li {
+    padding: 8px 0; border-bottom: 1px solid var(--border);
+    font-size: 13px; line-height: 1.6; display: flex; gap: 10px;
+  }
+  .points-list li:last-child { border-bottom: none; }
+  .point-num { color: var(--accent); font-size: 11px; flex-shrink: 0; padding-top: 2px; }
+
+  .table-wrapper { overflow-x: auto; margin-top: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { background: var(--surface2); color: var(--muted); text-align: left; padding: 10px 14px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+  td { padding: 10px 14px; border-top: 1px solid var(--border); }
+  tr:hover td { background: var(--surface2); }
+
+  .json-toggle { cursor: pointer; color: var(--muted); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; margin-top: 16px; }
+  .json-toggle:hover { color: var(--text); }
+  .raw-json {
+    display: none; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px; margin-top: 12px; overflow-x: auto;
+    font-size: 11px; line-height: 1.6; color: var(--accent2); max-height: 400px;
+  }
+  .raw-json.show { display: block; }
+
+  .confidence-bar { background: var(--border); border-radius: 4px; height: 6px; margin-top: 8px; overflow: hidden; }
+  .confidence-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); border-radius: 4px; transition: width 1s ease; }
+
+  footer { text-align: center; padding: 40px 0 20px; color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="noise"></div>
+<div class="grid-bg"></div>
+<div class="glow"></div>
+
+<div class="container">
+  <header>
+    <div class="logo-badge"><span class="logo-dot"></span>Powered by Claude AI</div>
+    <h1>Docu<span>Mind</span></h1>
+    <p class="subtitle">Drop any PDF, DOCX, or image — get instant structured extraction, entity recognition, and smart summaries.</p>
+  </header>
+
+  <div class="card">
+    <div class="card-label">API Configuration</div>
+    <div class="input-row">
+      <input type="url" id="apiUrl" placeholder="https://your-api.render.com/analyze" value="https://documind-api-ki30.onrender.com/analyze" />
+      <input type="text" id="apiKey" placeholder="Authorization / API Key" value="hackathon-secret-key-2025" style="max-width:280px" />
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-label">Document Upload</div>
+    <div class="drop-zone" id="dropZone">
+      <input type="file" id="fileInput" accept=".pdf,.docx,.jpg,.jpeg,.png,.webp,.gif" />
+      <div class="drop-icon">📄</div>
+      <div class="drop-text">Drop your document here</div>
+      <div class="drop-hint">Supports PDF, DOCX, JPEG, PNG, WEBP · Max 20MB</div>
+      <div class="file-name" id="fileName"></div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" id="analyzeBtn" onclick="analyze()" disabled>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        Analyze Document
+      </button>
+      <button class="btn btn-secondary" onclick="clearAll()">Clear</button>
+    </div>
+    <div id="status"></div>
+  </div>
+
+  <div id="results"></div>
+
+  <footer>DocuMind · AI-Powered Document Analysis · Built with FastAPI + Claude</footer>
+</div>
+
+<script>
+const fileInput = document.getElementById('fileInput');
+const dropZone = document.getElementById('dropZone');
+const fileNameEl = document.getElementById('fileName');
+const analyzeBtn = document.getElementById('analyzeBtn');
+const statusEl = document.getElementById('status');
+const resultsEl = document.getElementById('results');
+
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) setFile(fileInput.files[0]);
+});
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('drag-over');
+  if (e.dataTransfer.files[0]) { fileInput.files = e.dataTransfer.files; setFile(e.dataTransfer.files[0]); }
+});
+
+function setFile(file) {
+  fileNameEl.textContent = `📎 ${file.name} (${(file.size/1024).toFixed(1)} KB)`;
+  fileNameEl.style.display = 'block';
+  analyzeBtn.disabled = false;
+}
+
+function setStatus(type, msg) {
+  statusEl.className = type;
+  statusEl.innerHTML = type === 'loading'
+    ? `<div class="spinner"></div><span>${msg}</span>`
+    : `<span>${msg}</span>`;
+  statusEl.style.display = 'flex';
+}
+
+function clearAll() {
+  fileInput.value = '';
+  fileNameEl.style.display = 'none';
+  fileNameEl.textContent = '';
+  analyzeBtn.disabled = true;
+  statusEl.style.display = 'none';
+  statusEl.className = '';
+  resultsEl.style.display = 'none';
+  resultsEl.innerHTML = '';
+}
+
+async function analyze() {
+  const url = document.getElementById('apiUrl').value.trim();
+  const key = document.getElementById('apiKey').value.trim();
+  const file = fileInput.files[0];
+
+  if (!url) { setStatus('error', '⚠ Please enter your API endpoint URL'); return; }
+  if (!file) { setStatus('error', '⚠ Please select a file to analyze'); return; }
+
+  analyzeBtn.disabled = true;
+  resultsEl.style.display = 'none';
+  setStatus('loading', 'Uploading and analyzing document...');
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const headers = {};
+    if (key) headers['Authorization'] = key.startsWith('Bearer ') ? key : `Bearer ${key}`;
+
+    const response = await fetch(url, { method: 'POST', headers, body: formData });
+    const data = await response.json();
+
+    if (!response.ok) {
+      setStatus('error', `❌ Error ${response.status}: ${data.detail || JSON.stringify(data)}`);
+      analyzeBtn.disabled = false;
+      return;
+    }
+
+    setStatus('success', `✓ Analysis complete — ${file.name}`);
+    renderResults(data, file.name);
+  } catch (err) {
+    setStatus('error', `❌ Request failed: ${err.message}`);
+  }
+  analyzeBtn.disabled = false;
+}
+
+function safe(val) {
+  if (!val || val === 'null' || val === null) return '<span style="color:var(--muted)">—</span>';
+  return val;
+}
+
+function renderResults(data, filename) {
+  const a = data.analysis || data;
+
+  const sentimentClass = {
+    positive: 'badge-sentiment-positive',
+    negative: 'badge-sentiment-negative',
+    neutral: 'badge-sentiment-neutral',
+    mixed: 'badge-sentiment-mixed'
+  }[a.sentiment?.toLowerCase()] || 'badge-sentiment-neutral';
+
+  const confidence = a.confidence_score ? Math.round(a.confidence_score * 100) : 90;
+
+  const ki = a.key_information || {};
+  const ed = a.extracted_data || {};
+  const ci = ed.contact_info || {};
+
+  // Tables
+  let tablesHtml = '';
+  if (a.tables && a.tables.length > 0) {
+    a.tables.forEach(t => {
+      if (!t.headers || !t.rows) return;
+      tablesHtml += `<div class="info-block" style="margin-bottom:16px">
+        <h4>${t.title || 'Table'}</h4>
+        <div class="table-wrapper"><table>
+          <tr>${t.headers.map(h => `<th>${h}</th>`).join('')}</tr>
+          ${t.rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}
+        </table></div></div>`;
+    });
+  }
+
+  resultsEl.innerHTML = `
+    <div class="card">
+      <div class="result-header">
+        <div class="result-title">Analysis Results</div>
+        <div class="badges">
+          <span class="badge badge-type">${a.document_type || 'Document'}</span>
+          <span class="badge ${sentimentClass}">${a.sentiment || 'neutral'}</span>
+          ${a.language ? `<span class="badge badge-sentiment-neutral">${a.language}</span>` : ''}
+        </div>
+      </div>
+
+      ${a.summary ? `<div class="summary-box">${a.summary}</div>` : ''}
+
+      <div style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:4px">
+          <span>Confidence Score</span><span>${confidence}%</span>
+        </div>
+        <div class="confidence-bar"><div class="confidence-fill" style="width:${confidence}%"></div></div>
+      </div>
+
+      <div class="grid-2">
+        <div class="info-block">
+          <h4>Key Information</h4>
+          <div class="info-row"><span class="info-key">Title</span><span class="info-val">${safe(ki.title)}</span></div>
+          <div class="info-row"><span class="info-key">Date</span><span class="info-val">${safe(ki.date)}</span></div>
+          <div class="info-row"><span class="info-key">Author</span><span class="info-val">${safe(ki.author_or_sender)}</span></div>
+          <div class="info-row"><span class="info-key">Recipient</span><span class="info-val">${safe(ki.recipient)}</span></div>
+          <div class="info-row"><span class="info-key">Subject</span><span class="info-val">${safe(ki.subject)}</span></div>
+        </div>
+        <div class="info-block">
+          <h4>Contact Information</h4>
+          <div class="info-row"><span class="info-key">Emails</span><span class="info-val">${ci.emails?.length ? ci.emails.join(', ') : '—'}</span></div>
+          <div class="info-row"><span class="info-key">Phones</span><span class="info-val">${ci.phones?.length ? ci.phones.join(', ') : '—'}</span></div>
+          <div class="info-row"><span class="info-key">Addresses</span><span class="info-val">${ci.addresses?.length ? ci.addresses.join('; ') : '—'}</span></div>
+          <div class="info-row"><span class="info-key">Amounts</span><span class="info-val">${ed.amounts?.length ? ed.amounts.slice(0,4).join(', ') : '—'}</span></div>
+          <div class="info-row"><span class="info-key">Dates Found</span><span class="info-val">${ed.dates?.length ? ed.dates.slice(0,3).join(', ') : '—'}</span></div>
+        </div>
+      </div>
+
+      ${ed.entities?.length ? `
+      <div class="info-block" style="margin-bottom:16px">
+        <h4>Named Entities</h4>
+        <div class="tag-list" style="margin-top:4px">
+          ${ed.entities.map(e => `<span class="tag tag-accent">${e}</span>`).join('')}
+        </div>
+      </div>` : ''}
+
+      ${ed.key_points?.length ? `
+      <div class="info-block" style="margin-bottom:16px">
+        <h4>Key Points</h4>
+        <ul class="points-list">
+          ${ed.key_points.map((p,i) => `<li><span class="point-num">${String(i+1).padStart(2,'0')}</span>${p}</li>`).join('')}
+        </ul>
+      </div>` : ''}
+
+      ${tablesHtml}
+
+      ${a.warnings?.length ? `
+      <div style="background:rgba(255,107,107,0.05);border:1px solid rgba(255,107,107,0.2);border-radius:10px;padding:12px 16px;font-size:12px;color:var(--error);margin-bottom:16px">
+        ⚠ ${a.warnings.join(' · ')}
+      </div>` : ''}
+
+      <div class="json-toggle" onclick="toggleJson()">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        View raw JSON response
+      </div>
+      <pre class="raw-json" id="rawJson">${JSON.stringify(data, null, 2)}</pre>
+    </div>
+  `;
+  resultsEl.style.display = 'block';
+
+  // Animate confidence bar
+  setTimeout(() => {
+    const fill = resultsEl.querySelector('.confidence-fill');
+    if (fill) fill.style.width = confidence + '%';
+  }, 100);
+}
+
+function toggleJson() {
+  document.getElementById('rawJson').classList.toggle('show');
+}
+</script>
+</body>
+</html>

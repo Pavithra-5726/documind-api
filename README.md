@@ -233,7 +233,7 @@ Open `index.html` in your browser or use Live Server.
 
 ## 👨‍💻 Author
 
-**Your Name**  
+** PAVITHRA S **  
 Guvi Hackathon 2026
 GitHub: [PAVITHRA S](https://github.com/pavithra-5726)
 
